@@ -170,7 +170,14 @@ __global__ void persistent_megakernel(
         // ====================================================================
 
         if (bid == 0) {
-            // Block 0: Apply RoPE to Q and K, append to KV cache
+            // Block 0: Apply QK-norm, then RoPE to Q and K, append to KV cache
+
+            // QK-norm: per-head RMSNorm on Q and K (Qwen3-specific)
+            qk_rmsnorm_inplace(act.q_proj, lw.q_norm, config::NUM_Q_HEADS,
+                               config::HEAD_DIM, smem_scratch);
+            qk_rmsnorm_inplace(act.k_proj, lw.k_norm, config::NUM_KV_HEADS,
+                               config::HEAD_DIM, smem_scratch);
+
             // RoPE on all Q heads
             for (int h = 0; h < config::NUM_Q_HEADS; h++) {
                 apply_rope_inplace(act.q_proj + h * config::HEAD_DIM, current_pos, config::HEAD_DIM);
@@ -511,16 +518,18 @@ void benchmark_sweep(MegakernelState& state, int prompt_token) {
 // Weight offset ordering (must match host/weight_loader.py save_flat_binary):
 //   offsets[0]  = embedding
 //   offsets[1]  = final_norm
-//   offsets[2 + layer*9 + 0] = layer.{layer}.attn_norm
-//   offsets[2 + layer*9 + 1] = layer.{layer}.w_q
-//   offsets[2 + layer*9 + 2] = layer.{layer}.w_k
-//   offsets[2 + layer*9 + 3] = layer.{layer}.w_v
-//   offsets[2 + layer*9 + 4] = layer.{layer}.w_o
-//   offsets[2 + layer*9 + 5] = layer.{layer}.ffn_norm
-//   offsets[2 + layer*9 + 6] = layer.{layer}.w_gate
-//   offsets[2 + layer*9 + 7] = layer.{layer}.w_up
-//   offsets[2 + layer*9 + 8] = layer.{layer}.w_down
-//   Total: 2 + 28*9 = 254 offsets
+//   offsets[2 + layer*11 + 0]  = layer.{layer}.attn_norm
+//   offsets[2 + layer*11 + 1]  = layer.{layer}.w_q
+//   offsets[2 + layer*11 + 2]  = layer.{layer}.w_k
+//   offsets[2 + layer*11 + 3]  = layer.{layer}.w_v
+//   offsets[2 + layer*11 + 4]  = layer.{layer}.q_norm
+//   offsets[2 + layer*11 + 5]  = layer.{layer}.k_norm
+//   offsets[2 + layer*11 + 6]  = layer.{layer}.w_o
+//   offsets[2 + layer*11 + 7]  = layer.{layer}.ffn_norm
+//   offsets[2 + layer*11 + 8]  = layer.{layer}.w_gate
+//   offsets[2 + layer*11 + 9]  = layer.{layer}.w_up
+//   offsets[2 + layer*11 + 10] = layer.{layer}.w_down
+//   Total: 2 + 28*11 = 310 offsets
 // ============================================================================
 
 #ifdef MEGAKERNEL_LIBRARY_MODE
@@ -530,7 +539,7 @@ extern "C" {
 // Initialize the megakernel state.
 // d_weights: GPU pointer to the flat weight binary (already on device)
 // offsets: host array of byte offsets into d_weights for each weight tensor
-// num_offsets: should be 254 (2 global + 28 layers * 9 weights)
+// num_offsets: should be 310 (2 global + 28 layers * 11 weights)
 // Returns opaque handle to MegakernelState.
 void* megakernel_init(void* d_weights, long long* offsets, int num_offsets) {
     MegakernelState* state = new MegakernelState();
@@ -545,17 +554,19 @@ void* megakernel_init(void* d_weights, long long* offsets, int num_offsets) {
     state->weights.final_norm  = reinterpret_cast<const __nv_bfloat16*>(base + offsets[1]);
 
     for (int i = 0; i < config::NUM_LAYERS; i++) {
-        int idx = 2 + i * 9;
+        int idx = 2 + i * 11;
         LayerWeights& lw = state->weights.layers[i];
         lw.attn_norm = reinterpret_cast<const __nv_bfloat16*>(base + offsets[idx + 0]);
         lw.w_q       = reinterpret_cast<const __nv_bfloat16*>(base + offsets[idx + 1]);
         lw.w_k       = reinterpret_cast<const __nv_bfloat16*>(base + offsets[idx + 2]);
         lw.w_v       = reinterpret_cast<const __nv_bfloat16*>(base + offsets[idx + 3]);
-        lw.w_o       = reinterpret_cast<const __nv_bfloat16*>(base + offsets[idx + 4]);
-        lw.ffn_norm  = reinterpret_cast<const __nv_bfloat16*>(base + offsets[idx + 5]);
-        lw.w_gate    = reinterpret_cast<const __nv_bfloat16*>(base + offsets[idx + 6]);
-        lw.w_up      = reinterpret_cast<const __nv_bfloat16*>(base + offsets[idx + 7]);
-        lw.w_down    = reinterpret_cast<const __nv_bfloat16*>(base + offsets[idx + 8]);
+        lw.q_norm    = reinterpret_cast<const __nv_bfloat16*>(base + offsets[idx + 4]);
+        lw.k_norm    = reinterpret_cast<const __nv_bfloat16*>(base + offsets[idx + 5]);
+        lw.w_o       = reinterpret_cast<const __nv_bfloat16*>(base + offsets[idx + 6]);
+        lw.ffn_norm  = reinterpret_cast<const __nv_bfloat16*>(base + offsets[idx + 7]);
+        lw.w_gate    = reinterpret_cast<const __nv_bfloat16*>(base + offsets[idx + 8]);
+        lw.w_up      = reinterpret_cast<const __nv_bfloat16*>(base + offsets[idx + 9]);
+        lw.w_down    = reinterpret_cast<const __nv_bfloat16*>(base + offsets[idx + 10]);
     }
 
     // Allocate GPU buffers

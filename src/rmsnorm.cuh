@@ -50,6 +50,39 @@ __device__ __forceinline__ void rmsnorm(
     }
 }
 
+// Per-head QK-norm: applies RMSNorm to each head independently
+// Used by Qwen3 on Q and K vectors after projection, before RoPE.
+// vec: [num_heads * HEAD_DIM] float (in-place)
+// weight: [HEAD_DIM] bf16 (shared across all heads)
+__device__ __forceinline__ void qk_rmsnorm_inplace(
+    float* vec,
+    const __nv_bfloat16* __restrict__ weight,
+    int num_heads,
+    int head_dim,
+    float* smem_scratch
+) {
+    // Each head is normalized independently
+    for (int h = 0; h < num_heads; h++) {
+        float* head_vec = vec + h * head_dim;
+
+        // Compute sum of squares for this head
+        float sum_sq = 0.0f;
+        for (int i = threadIdx.x; i < head_dim; i += blockDim.x) {
+            float val = head_vec[i];
+            sum_sq += val * val;
+        }
+        sum_sq = block_reduce_sum(sum_sq, smem_scratch);
+        float rms_inv = fast_rsqrt(sum_sq / (float)head_dim + config::RMS_NORM_EPS);
+
+        // Normalize and scale
+        for (int i = threadIdx.x; i < head_dim; i += blockDim.x) {
+            float w = bf16_to_float(__ldg(&weight[i]));
+            head_vec[i] = head_vec[i] * rms_inv * w;
+        }
+        __syncthreads();
+    }
+}
+
 // Variant that reads float input (for when input is already in float)
 __device__ __forceinline__ void rmsnorm_float_in(
     const float* __restrict__ input,

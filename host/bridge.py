@@ -85,7 +85,8 @@ class MegakernelEngine:
 
         # Build ordered offsets array matching the C API expectation:
         # [embedding, final_norm, layer.0.attn_norm, layer.0.w_q, ..., layer.27.w_down]
-        layer_keys = ["attn_norm", "w_q", "w_k", "w_v", "w_o", "ffn_norm", "w_gate", "w_up", "w_down"]
+        # 11 weights per layer: attn_norm, w_q, w_k, w_v, q_norm, k_norm, w_o, ffn_norm, w_gate, w_up, w_down
+        layer_keys = ["attn_norm", "w_q", "w_k", "w_v", "q_norm", "k_norm", "w_o", "ffn_norm", "w_gate", "w_up", "w_down"]
         offsets_list = [offsets_dict["embedding"], offsets_dict["final_norm"]]
         for i in range(28):
             for key in layer_keys:

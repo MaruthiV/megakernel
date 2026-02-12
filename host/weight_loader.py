@@ -12,6 +12,8 @@ Weight layout (all BF16):
     - w_q:        [Q_DIM, HIDDEN_DIM]       = [2048, 1024]  (transposed for GEMV)
     - w_k:        [KV_DIM, HIDDEN_DIM]      = [1024, 1024]
     - w_v:        [KV_DIM, HIDDEN_DIM]      = [1024, 1024]
+    - q_norm:     [HEAD_DIM]                = [128]  (QK-norm, Qwen3-specific)
+    - k_norm:     [HEAD_DIM]                = [128]  (QK-norm, Qwen3-specific)
     - w_o:        [HIDDEN_DIM, Q_DIM]       = [1024, 2048]
     - ffn_norm:   [HIDDEN_DIM]
     - w_gate:     [INTERMEDIATE_DIM, HIDDEN_DIM] = [3072, 1024]
@@ -121,6 +123,8 @@ def validate_shapes(weights):
             f"layer.{i}.w_q": (Q_DIM, HIDDEN_DIM),
             f"layer.{i}.w_k": (KV_DIM, HIDDEN_DIM),
             f"layer.{i}.w_v": (KV_DIM, HIDDEN_DIM),
+            f"layer.{i}.q_norm": (HEAD_DIM,),
+            f"layer.{i}.k_norm": (HEAD_DIM,),
             f"layer.{i}.w_o": (Q_DIM, HIDDEN_DIM),
             f"layer.{i}.ffn_norm": (HIDDEN_DIM,),
             f"layer.{i}.w_gate": (INTERMEDIATE_DIM, HIDDEN_DIM),
@@ -146,11 +150,13 @@ def save_flat_binary(weights, output_path="weights.bin"):
          b. w_q [Q_DIM, HIDDEN_DIM] bf16
          c. w_k [KV_DIM, HIDDEN_DIM] bf16
          d. w_v [KV_DIM, HIDDEN_DIM] bf16
-         e. w_o [Q_DIM, HIDDEN_DIM] bf16
-         f. ffn_norm [HIDDEN_DIM] bf16
-         g. w_gate [INTERMEDIATE_DIM, HIDDEN_DIM] bf16
-         h. w_up [INTERMEDIATE_DIM, HIDDEN_DIM] bf16
-         i. w_down [HIDDEN_DIM, INTERMEDIATE_DIM] bf16
+         e. q_norm [HEAD_DIM] bf16
+         f. k_norm [HEAD_DIM] bf16
+         g. w_o [Q_DIM, HIDDEN_DIM] bf16
+         h. ffn_norm [HIDDEN_DIM] bf16
+         i. w_gate [INTERMEDIATE_DIM, HIDDEN_DIM] bf16
+         j. w_up [INTERMEDIATE_DIM, HIDDEN_DIM] bf16
+         k. w_down [HIDDEN_DIM, INTERMEDIATE_DIM] bf16
 
     Also saves a metadata header with offsets for each weight.
     """
@@ -171,12 +177,14 @@ def save_flat_binary(weights, output_path="weights.bin"):
     # Final norm
     add_weight("final_norm", weights["final_norm"])
 
-    # Per-layer weights
+    # Per-layer weights (11 per layer, must match CUDA kernel's extern C init order)
     for i in range(NUM_LAYERS):
         add_weight(f"layer.{i}.attn_norm", weights[f"layer.{i}.attn_norm"])
         add_weight(f"layer.{i}.w_q", weights[f"layer.{i}.w_q"])
         add_weight(f"layer.{i}.w_k", weights[f"layer.{i}.w_k"])
         add_weight(f"layer.{i}.w_v", weights[f"layer.{i}.w_v"])
+        add_weight(f"layer.{i}.q_norm", weights[f"layer.{i}.q_norm"])
+        add_weight(f"layer.{i}.k_norm", weights[f"layer.{i}.k_norm"])
         add_weight(f"layer.{i}.w_o", weights[f"layer.{i}.w_o"])
         add_weight(f"layer.{i}.ffn_norm", weights[f"layer.{i}.ffn_norm"])
         add_weight(f"layer.{i}.w_gate", weights[f"layer.{i}.w_gate"])

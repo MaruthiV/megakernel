@@ -114,14 +114,16 @@ __host__ inline LaunchConfig get_launch_config(int device_id) {
 
 struct LayerWeights {
     const __nv_bfloat16* attn_norm;  // [HIDDEN_DIM]
-    const __nv_bfloat16* w_q;        // [HIDDEN_DIM, Q_DIM]
-    const __nv_bfloat16* w_k;        // [HIDDEN_DIM, KV_DIM]
-    const __nv_bfloat16* w_v;        // [HIDDEN_DIM, KV_DIM]
-    const __nv_bfloat16* w_o;        // [Q_DIM, HIDDEN_DIM]
+    const __nv_bfloat16* w_q;        // [Q_DIM, HIDDEN_DIM]
+    const __nv_bfloat16* w_k;        // [KV_DIM, HIDDEN_DIM]
+    const __nv_bfloat16* w_v;        // [KV_DIM, HIDDEN_DIM]
+    const __nv_bfloat16* q_norm;     // [HEAD_DIM] RMSNorm on Q heads before RoPE
+    const __nv_bfloat16* k_norm;     // [HEAD_DIM] RMSNorm on K heads before RoPE
+    const __nv_bfloat16* w_o;        // [HIDDEN_DIM, Q_DIM]
     const __nv_bfloat16* ffn_norm;   // [HIDDEN_DIM]
-    const __nv_bfloat16* w_gate;     // [HIDDEN_DIM, INTERMEDIATE_DIM]
-    const __nv_bfloat16* w_up;       // [HIDDEN_DIM, INTERMEDIATE_DIM]
-    const __nv_bfloat16* w_down;     // [INTERMEDIATE_DIM, HIDDEN_DIM]
+    const __nv_bfloat16* w_gate;     // [INTERMEDIATE_DIM, HIDDEN_DIM]
+    const __nv_bfloat16* w_up;       // [INTERMEDIATE_DIM, HIDDEN_DIM]
+    const __nv_bfloat16* w_down;     // [HIDDEN_DIM, INTERMEDIATE_DIM]
 };
 
 struct ModelWeights {
