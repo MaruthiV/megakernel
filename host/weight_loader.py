@@ -9,14 +9,14 @@ Weight layout (all BF16):
   - final_norm: [HIDDEN_DIM] = [1024]
   - For each layer 0..27:
     - attn_norm:  [HIDDEN_DIM]
-    - w_q:        [Q_DIM, HIDDEN_DIM]       = [1024, 1024]  (transposed for GEMV)
-    - w_k:        [KV_DIM, HIDDEN_DIM]      = [512, 1024]
-    - w_v:        [KV_DIM, HIDDEN_DIM]      = [512, 1024]
-    - w_o:        [HIDDEN_DIM, Q_DIM]       = [1024, 1024]
+    - w_q:        [Q_DIM, HIDDEN_DIM]       = [2048, 1024]  (transposed for GEMV)
+    - w_k:        [KV_DIM, HIDDEN_DIM]      = [1024, 1024]
+    - w_v:        [KV_DIM, HIDDEN_DIM]      = [1024, 1024]
+    - w_o:        [HIDDEN_DIM, Q_DIM]       = [1024, 2048]
     - ffn_norm:   [HIDDEN_DIM]
-    - w_gate:     [INTERMEDIATE_DIM, HIDDEN_DIM] = [2816, 1024]
-    - w_up:       [INTERMEDIATE_DIM, HIDDEN_DIM] = [2816, 1024]
-    - w_down:     [HIDDEN_DIM, INTERMEDIATE_DIM] = [1024, 2816]
+    - w_gate:     [INTERMEDIATE_DIM, HIDDEN_DIM] = [3072, 1024]
+    - w_up:       [INTERMEDIATE_DIM, HIDDEN_DIM] = [3072, 1024]
+    - w_down:     [HIDDEN_DIM, INTERMEDIATE_DIM] = [1024, 3072]
 
 Note: Weight matrices are stored as [output_dim, input_dim] (row-major).
 For GEMV (output = weight @ input), each row of the weight matrix corresponds
@@ -34,11 +34,11 @@ HIDDEN_DIM = 1024
 NUM_LAYERS = 28
 NUM_Q_HEADS = 16
 NUM_KV_HEADS = 8
-HEAD_DIM = 64
-INTERMEDIATE_DIM = 2816
+HEAD_DIM = 128
+INTERMEDIATE_DIM = 3072
 VOCAB_SIZE = 151936
-Q_DIM = NUM_Q_HEADS * HEAD_DIM     # 1024
-KV_DIM = NUM_KV_HEADS * HEAD_DIM   # 512
+Q_DIM = NUM_Q_HEADS * HEAD_DIM     # 2048
+KV_DIM = NUM_KV_HEADS * HEAD_DIM   # 1024
 
 MODEL_ID = "Qwen/Qwen3-0.6B"
 

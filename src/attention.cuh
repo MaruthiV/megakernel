@@ -8,7 +8,7 @@
 // RoPE (Rotary Position Embeddings)
 //
 // Applied to Q and K vectors before attention.
-// For Qwen3-0.6B: head_dim=64, rope_theta=1,000,000
+// For Qwen3-0.6B: head_dim=128, rope_theta=1,000,000
 //
 // RoPE pairs elements (i, i + head_dim/2) and applies rotation:
 //   q_new[i]              = q[i] * cos(theta) - q[i + half] * sin(theta)
@@ -22,7 +22,7 @@
 __device__ __forceinline__ void apply_rope_inplace(
     float* vec,    // [HEAD_DIM] vector (Q or K head)
     int pos,       // sequence position
-    int head_dim   // HEAD_DIM = 64
+    int head_dim   // HEAD_DIM = 128
 ) {
     int half = head_dim / 2;  // 32
 
@@ -80,81 +80,20 @@ __device__ void single_head_attention(
     float* smem_q,
     float* smem_scratch
 ) {
-    const int D = config::HEAD_DIM;  // 64
+    const int D = config::HEAD_DIM;  // 128
     float scale = 1.0f / sqrtf((float)D);
 
-    // Load Q into shared memory for fast repeated access
-    for (int i = threadIdx.x; i < D; i += blockDim.x) {
-        smem_q[i] = q_head[i] * scale;  // pre-scale Q
-    }
-    __syncthreads();
-
-    // Get pointers to K and V caches for this layer and head
-    const __nv_bfloat16* k_cache = get_key_cache(kv_data, layer, kv_head);
-    const __nv_bfloat16* v_cache = get_value_cache(kv_data, layer, kv_head);
-    // k_cache layout: [MAX_SEQ_LEN, HEAD_DIM] with HEAD_DIM contiguous
-
-    // Online softmax state
-    float running_max = -INFINITY;
-    float exp_sum = 0.0f;
-
-    // Accumulator for weighted V values (per-thread, over assigned dims)
-    float acc[4] = {0.0f, 0.0f, 0.0f, 0.0f};  // each thread handles up to 4 output dims
-
-    // Determine which output dimensions this thread handles
-    // With blockDim.x threads and HEAD_DIM=64, each thread handles a few dims
-    // Actually, we need all threads to cooperate on the dot product for each position,
-    // then each thread maintains its own output accumulator for its dimensions.
-
-    // Strategy: iterate over KV positions. For each position:
-    //  1. All threads cooperate to compute Q.K dot product (reduction)
-    //  2. Thread 0 broadcasts the softmax weight
-    //  3. Each thread updates its output dimensions with the weighted V
-
-    for (int t = 0; t < seq_len; t++) {
-        // Compute Q . K[t] (all threads cooperate)
-        float dot = 0.0f;
-        for (int d = threadIdx.x; d < D; d += blockDim.x) {
-            float k_val = bf16_to_float(k_cache[t * D + d]);
-            dot += smem_q[d] * k_val;  // smem_q already scaled
-        }
-        dot = block_reduce_sum(dot, smem_scratch);
-        // Now dot is the attention score for position t (in thread 0, broadcast via smem)
-
-        // Online softmax update
-        float old_max = running_max;
-        running_max = fmaxf(running_max, dot);
-        float correction = fast_exp(old_max - running_max);
-        float weight = fast_exp(dot - running_max);
-        exp_sum = exp_sum * correction + weight;
-
-        // Update output accumulator with weighted V[t]
-        for (int d = threadIdx.x; d < D; d += blockDim.x) {
-            float v_val = bf16_to_float(v_cache[t * D + d]);
-            // acc for dimension d (stored at d's local index)
-            // We need per-dimension accumulators in registers
-            // Since each thread handles D/blockDim.x dimensions, use a loop
-            // For now, use global memory output as accumulator (will optimize later)
-        }
-
-        // Actually, let's use a simpler approach: each thread tracks dims it owns
-        // For HEAD_DIM=64 and blockDim.x=512, most threads do nothing.
-        // Better: assign fewer threads to attention (e.g., one warp per head)
-    }
-
-    // Let me restructure: use just 1-2 warps for the dot product
-    // and update output in the same threads.
-    // ACTUALLY: For a proper implementation with HEAD_DIM=64:
-    // Use one warp (32 threads). Each thread handles 2 dimensions of Q,K,V.
-
-    // Clear previous state - let's redo with warp-level implementation
+    // This block-level implementation is superseded by warp_attention below.
+    // Kept as reference; the actual kernel uses warp_attention via multi_head_attention.
+    (void)q_head; (void)kv_data; (void)output; (void)layer; (void)kv_head;
+    (void)seq_len; (void)smem_q; (void)smem_scratch; (void)scale;
 }
 
 // ============================================================================
 // Warp-level single head attention (optimized)
 //
 // Uses exactly one warp (32 threads) per Q head.
-// Each thread handles 2 dimensions (HEAD_DIM=64 / 32 threads = 2 per thread).
+// Each thread handles 4 dimensions (HEAD_DIM=128 / 32 threads = 4 per thread).
 // Dot product via warp_reduce_sum.
 // ============================================================================
 
@@ -166,8 +105,8 @@ __device__ void warp_attention(
     int kv_head,
     int seq_len
 ) {
-    const int D = config::HEAD_DIM;  // 64
-    const int DIMS_PER_THREAD = D / 32;  // 2
+    const int D = config::HEAD_DIM;  // 128
+    const int DIMS_PER_THREAD = D / 32;  // 4
     float scale = 1.0f / sqrtf((float)D);
 
     int lane = threadIdx.x % 32;
@@ -235,9 +174,9 @@ __device__ void warp_attention(
 // The remaining warps in the block are idle during attention (but the whole
 // block is used for prefetching later).
 //
-// q_proj:  [Q_DIM] = [1024] float (16 heads * 64 dims)
-// k_proj:  [KV_DIM] = [512] float (already written to KV cache via append_kv)
-// output:  [Q_DIM] = [1024] float (concatenated head outputs)
+// q_proj:  [Q_DIM] = [2048] float (16 heads * 128 dims)
+// k_proj:  [KV_DIM] = [1024] float (already written to KV cache via append_kv)
+// output:  [Q_DIM] = [2048] float (concatenated head outputs)
 // ============================================================================
 
 __device__ void multi_head_attention(

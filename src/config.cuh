@@ -14,8 +14,8 @@ constexpr int HIDDEN_DIM      = 1024;
 constexpr int NUM_LAYERS       = 28;
 constexpr int NUM_Q_HEADS      = 16;
 constexpr int NUM_KV_HEADS     = 8;
-constexpr int HEAD_DIM         = 64;   // HIDDEN_DIM / NUM_Q_HEADS
-constexpr int INTERMEDIATE_DIM = 2816; // MLP intermediate size (SwiGLU)
+constexpr int HEAD_DIM         = 128;  // explicitly set in Qwen3 config (not hidden/heads)
+constexpr int INTERMEDIATE_DIM = 3072; // MLP intermediate size (SwiGLU)
 constexpr int VOCAB_SIZE       = 151936;
 constexpr int MAX_SEQ_LEN      = 4096; // max context we support
 constexpr float ROPE_THETA     = 1000000.0f;
@@ -23,19 +23,19 @@ constexpr float RMS_NORM_EPS   = 1e-6f;
 
 // Derived constants
 constexpr int QKV_DIM          = HIDDEN_DIM + 2 * (NUM_KV_HEADS * HEAD_DIM);
-                                 // 1024 + 2*512 = 2048
-constexpr int Q_DIM            = NUM_Q_HEADS * HEAD_DIM;   // 1024
-constexpr int KV_DIM           = NUM_KV_HEADS * HEAD_DIM;  // 512
+                                 // 1024 + 2*1024 = 3072
+constexpr int Q_DIM            = NUM_Q_HEADS * HEAD_DIM;   // 2048
+constexpr int KV_DIM           = NUM_KV_HEADS * HEAD_DIM;  // 1024
 constexpr int GQA_RATIO        = NUM_Q_HEADS / NUM_KV_HEADS; // 2
 
 // Per-layer weight sizes in bytes (BF16)
-constexpr size_t W_Q_BYTES     = HIDDEN_DIM * Q_DIM * 2;       // 2 MB
-constexpr size_t W_K_BYTES     = HIDDEN_DIM * KV_DIM * 2;      // 1 MB
-constexpr size_t W_V_BYTES     = HIDDEN_DIM * KV_DIM * 2;      // 1 MB
-constexpr size_t W_O_BYTES     = Q_DIM * HIDDEN_DIM * 2;       // 2 MB
-constexpr size_t W_GATE_BYTES  = HIDDEN_DIM * INTERMEDIATE_DIM * 2; // ~5.5 MB
-constexpr size_t W_UP_BYTES    = HIDDEN_DIM * INTERMEDIATE_DIM * 2; // ~5.5 MB
-constexpr size_t W_DOWN_BYTES  = INTERMEDIATE_DIM * HIDDEN_DIM * 2; // ~5.5 MB
+constexpr size_t W_Q_BYTES     = HIDDEN_DIM * Q_DIM * 2;       // 4 MB
+constexpr size_t W_K_BYTES     = HIDDEN_DIM * KV_DIM * 2;      // 2 MB
+constexpr size_t W_V_BYTES     = HIDDEN_DIM * KV_DIM * 2;      // 2 MB
+constexpr size_t W_O_BYTES     = Q_DIM * HIDDEN_DIM * 2;       // 4 MB
+constexpr size_t W_GATE_BYTES  = HIDDEN_DIM * INTERMEDIATE_DIM * 2; // 6 MB
+constexpr size_t W_UP_BYTES    = HIDDEN_DIM * INTERMEDIATE_DIM * 2; // 6 MB
+constexpr size_t W_DOWN_BYTES  = INTERMEDIATE_DIM * HIDDEN_DIM * 2; // 6 MB
 constexpr size_t NORM_BYTES    = HIDDEN_DIM * 2;               // 2 KB
 
 constexpr size_t LAYER_WEIGHT_BYTES =
