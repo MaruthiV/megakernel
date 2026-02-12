@@ -160,7 +160,7 @@ def save_flat_binary(weights, output_path="weights.bin"):
 
     def add_weight(name, tensor):
         nonlocal current_offset
-        data = tensor.contiguous().numpy().view(np.uint16)  # bf16 as raw bytes
+        data = tensor.contiguous().view(torch.uint16).numpy()  # bf16 as raw uint16 bytes
         offsets[name] = current_offset
         parts.append(data.tobytes())
         current_offset += len(parts[-1])
