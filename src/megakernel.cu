@@ -501,13 +501,126 @@ void benchmark_sweep(MegakernelState& state, int prompt_token) {
 // Actual usage goes through the Python launcher + Colab notebook.
 // ============================================================================
 
-#ifndef MEGAKERNEL_LIBRARY_MODE
+// ============================================================================
+// Library Mode: extern "C" API for Python ctypes
+//
+// When compiled with -DMEGAKERNEL_LIBRARY_MODE, these flat C functions are
+// exported so Python can call them via ctypes. The MegakernelState is passed
+// around as an opaque void* handle.
+//
+// Weight offset ordering (must match host/weight_loader.py save_flat_binary):
+//   offsets[0]  = embedding
+//   offsets[1]  = final_norm
+//   offsets[2 + layer*9 + 0] = layer.{layer}.attn_norm
+//   offsets[2 + layer*9 + 1] = layer.{layer}.w_q
+//   offsets[2 + layer*9 + 2] = layer.{layer}.w_k
+//   offsets[2 + layer*9 + 3] = layer.{layer}.w_v
+//   offsets[2 + layer*9 + 4] = layer.{layer}.w_o
+//   offsets[2 + layer*9 + 5] = layer.{layer}.ffn_norm
+//   offsets[2 + layer*9 + 6] = layer.{layer}.w_gate
+//   offsets[2 + layer*9 + 7] = layer.{layer}.w_up
+//   offsets[2 + layer*9 + 8] = layer.{layer}.w_down
+//   Total: 2 + 28*9 = 254 offsets
+// ============================================================================
+
+#ifdef MEGAKERNEL_LIBRARY_MODE
+
+extern "C" {
+
+// Initialize the megakernel state.
+// d_weights: GPU pointer to the flat weight binary (already on device)
+// offsets: host array of byte offsets into d_weights for each weight tensor
+// num_offsets: should be 254 (2 global + 28 layers * 9 weights)
+// Returns opaque handle to MegakernelState.
+void* megakernel_init(void* d_weights, long long* offsets, int num_offsets) {
+    MegakernelState* state = new MegakernelState();
+
+    state->launch_cfg = get_launch_config(0);
+    state->current_pos = 0;
+
+    // Set up weight pointers from flat binary + offsets
+    const char* base = reinterpret_cast<const char*>(d_weights);
+
+    state->weights.embedding   = reinterpret_cast<const __nv_bfloat16*>(base + offsets[0]);
+    state->weights.final_norm  = reinterpret_cast<const __nv_bfloat16*>(base + offsets[1]);
+
+    for (int i = 0; i < config::NUM_LAYERS; i++) {
+        int idx = 2 + i * 9;
+        LayerWeights& lw = state->weights.layers[i];
+        lw.attn_norm = reinterpret_cast<const __nv_bfloat16*>(base + offsets[idx + 0]);
+        lw.w_q       = reinterpret_cast<const __nv_bfloat16*>(base + offsets[idx + 1]);
+        lw.w_k       = reinterpret_cast<const __nv_bfloat16*>(base + offsets[idx + 2]);
+        lw.w_v       = reinterpret_cast<const __nv_bfloat16*>(base + offsets[idx + 3]);
+        lw.w_o       = reinterpret_cast<const __nv_bfloat16*>(base + offsets[idx + 4]);
+        lw.ffn_norm  = reinterpret_cast<const __nv_bfloat16*>(base + offsets[idx + 5]);
+        lw.w_gate    = reinterpret_cast<const __nv_bfloat16*>(base + offsets[idx + 6]);
+        lw.w_up      = reinterpret_cast<const __nv_bfloat16*>(base + offsets[idx + 7]);
+        lw.w_down    = reinterpret_cast<const __nv_bfloat16*>(base + offsets[idx + 8]);
+    }
+
+    // Allocate GPU buffers
+    state->kv_cache = allocate_kv_cache();
+    state->activations = allocate_activations();
+    state->barriers = allocate_barriers(state->launch_cfg.num_blocks);
+    state->sampling = allocate_sampling_buffers(state->launch_cfg.num_blocks);
+
+    printf("Megakernel initialized:\n");
+    printf("  Blocks: %d, Threads/block: %d\n",
+           state->launch_cfg.num_blocks, state->launch_cfg.threads_per_block);
+    printf("  Peak BW: %.1f GB/s\n", state->launch_cfg.mem_bandwidth_gbps);
+    printf("  Weight offsets loaded: %d\n", num_offsets);
+
+    return static_cast<void*>(state);
+}
+
+// Run one decode step: input_token -> next token id
+int megakernel_decode(void* handle, int input_token) {
+    MegakernelState* state = static_cast<MegakernelState*>(handle);
+    return decode_step(*state, input_token);
+}
+
+// Reset KV cache and barriers for a new generation
+void megakernel_reset(void* handle) {
+    MegakernelState* state = static_cast<MegakernelState*>(handle);
+    reset_barriers(state->barriers, state->launch_cfg.num_blocks);
+    cudaMemset(state->kv_cache.data, 0,
+               (size_t)config::NUM_LAYERS * 2 * config::NUM_KV_HEADS
+               * config::MAX_SEQ_LEN * config::HEAD_DIM * sizeof(__nv_bfloat16));
+    state->current_pos = 0;
+}
+
+// Get current sequence position
+int megakernel_get_pos(void* handle) {
+    MegakernelState* state = static_cast<MegakernelState*>(handle);
+    return state->current_pos;
+}
+
+// Free all GPU resources
+void megakernel_free(void* handle) {
+    MegakernelState* state = static_cast<MegakernelState*>(handle);
+    free_kv_cache(state->kv_cache);
+    free_activations(state->activations);
+    free_barriers(state->barriers);
+    free_sampling_buffers(state->sampling);
+    delete state;
+}
+
+// Synchronize GPU (call after last decode before timing)
+void megakernel_sync() {
+    cudaDeviceSynchronize();
+}
+
+} // extern "C"
+
+#else
+// ============================================================================
+// Standalone Mode: main() for testing (no weights, just prints info)
+// ============================================================================
 
 int main(int argc, char** argv) {
     printf("MegaKernel for Qwen3-0.6B\n");
     printf("==========================\n\n");
 
-    // Print GPU info
     int device;
     cudaGetDevice(&device);
     cudaDeviceProp prop;
@@ -534,7 +647,7 @@ int main(int argc, char** argv) {
     printf("  Theoretical max tok/s: %.1f\n",
            cfg.mem_bandwidth_gbps * 1e9 / config::TOTAL_WEIGHT_BYTES);
 
-    printf("\nTo run actual inference, use the Colab notebook with weight_loader.py\n");
+    printf("\nTo run actual inference, use the Colab notebook.\n");
 
     return 0;
 }
