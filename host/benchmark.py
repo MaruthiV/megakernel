@@ -48,7 +48,7 @@ def get_peak_bandwidth():
     if cc >= 90:
         return 3350.0  # H100 SXM
     elif cc >= 80:
-        mem_gb = props.total_mem / 1e9
+        mem_gb = getattr(props, 'total_global_memory', getattr(props, 'total_mem', 0)) / 1e9
         return 2039.0 if mem_gb > 50 else 1555.0  # A100 80GB vs 40GB
     elif cc >= 75:
         return 300.0   # T4

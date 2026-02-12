@@ -33,7 +33,7 @@ def detect_gpu():
     gpu_info = {
         "name": props.name,
         "sm_count": props.multi_processor_count,
-        "total_memory_gb": props.total_mem / 1e9,
+        "total_memory_gb": getattr(props, 'total_global_memory', getattr(props, 'total_mem', 0)) / 1e9,
         "compute_capability": f"{props.major}.{props.minor}",
         "cc_major": props.major,
         "cc_minor": props.minor,
@@ -53,7 +53,8 @@ def detect_gpu():
     elif cc >= 80:
         gpu_info["arch_flag"] = "sm_80"
         gpu_info["class"] = "A100"
-        gpu_info["peak_bw_gbps"] = 1555.0 if props.total_mem < 50e9 else 2039.0
+        total_mem = getattr(props, 'total_global_memory', getattr(props, 'total_mem', 0))
+        gpu_info["peak_bw_gbps"] = 1555.0 if total_mem < 50e9 else 2039.0
     elif cc >= 75:
         gpu_info["arch_flag"] = "sm_75"
         gpu_info["class"] = "T4"
